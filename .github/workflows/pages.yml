@@ -1,0 +1,66 @@
+name: Publicar painel
+
+# Roda quando a rotina semanal (ou alguém) envia relatórios novos.
+# A rotina na nuvem só pode enviar para branches claude/...; este workflow
+# valida o relatório, leva a branch para a main e publica o GitHub Pages.
+on:
+  push:
+    branches: [main, "claude/**"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Validar os relatórios
+        run: python tools/atualizar_indice.py --out "$RUNNER_TEMP/check"
+
+      - name: Levar a branch da rotina para a main
+        if: startsWith(github.ref, 'refs/heads/claude/')
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B main origin/main
+          git merge --no-edit "$GITHUB_SHA"
+          python tools/atualizar_indice.py --out "$RUNNER_TEMP/check"
+          git push origin main
+          git push origin --delete "${GITHUB_REF#refs/heads/}" || true
+
+      - name: Montar o site
+        run: |
+          mkdir -p site
+          cp index.html robots.txt site/
+          python tools/atualizar_indice.py --out site/data
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
